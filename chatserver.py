@@ -17,13 +17,14 @@ class CommandHandler:
     '''处理命令，然后调用子类处理命令的方法'''
     def handle(self,session,line):
         if not line.strip():return
-        part = line.spit(' ',1)
-        cmd = part[0]
-        try:line = part[1].strip()
-        except IndexError:
-            line = ''
+        if line[0] == '/':
+            cmd = line.split(' ',1)[0][1:]
+            line = ''.join(line.split(' ', 1)[1:])
+        else:
+            cmd = 'say'
 
-        method = getattr(self,'do_'+cmd,None)
+        method = getattr(self, 'do_' + cmd, None)
+        print(method)
         try:
             method(session,line)
         except TypeError:
@@ -51,16 +52,30 @@ class Room(CommandHandler):
     def do_logout(self,session,line):
         raise EndSession
 
-class LoginRoom(Room):
-    '''为连接上的用户准备的房间'''
-
+class ChooseRoom(Room):
+    '''为连接上的用户准备的选择房间'''
     def add(self,session):
         Room.add(self,session)
         self.broadcast(('Welcome to %s\r\n' % self.server.name))
+        self.broadcast(('Please choose room:A_room B_room\r\n'))
+
+    def do_choose(self,session,line):
+        session.cho_room = linestrip()
+        if not session.cho_room in ['A_room','B_room']:
+            session.push(('Please enter a room\r\n').encode())
+        else:
+            session.enter(session.login_room)
+
+class LoginRoom(Room):
+    '''为连接上的用户准备的登录房间'''
+
+    def add(self,session):
+        Room.add(self,session)
+        self.broadcast(('Welcome to %s\r\n' % session.cho_room))
 
     '''处理未知命令（除login和logout）'''
     def unknown(self,session,cmd):
-        session.push(('Please log in \nUse "login"\r\n').encode())
+        session.push(('Please log in \nUse "login not %s"\r\n' % cmd).encode())
 
     def do_login(self,session,line):
         name = line.strip()
@@ -71,14 +86,16 @@ class LoginRoom(Room):
             session.push(('Please try again.\r\n').encode())
         else:
             session.name = name
-            session.enter(self.server.main_room)
+            main_room = getattr(self.server,session.cho_room,123)
+            '''进入所选择的房间'''
+            session.enter(main_room)
 
 class ChatRoom(Room):
     '''为用户准备的聊天室'''
 
     def add(self,session):
         Room.add(self,session)
-        self.broadcast(session.name + ' has entered the room.\r\n')
+        self.broadcast(session.name + ' has entered the %s.\r\n' % session.cho_room)
         self.server.users[session.name] = session
 
     def remove(self,session):
@@ -119,8 +136,9 @@ class ChatServer(dispatcher):
         self.listen(5)
         self.users = {}
         self.name =name
-        '''创建一个房间'''
-        self.main_room = ChatRoom(self)
+        '''创建2个房间'''
+        self.A_room = ChatRoom(self)
+        self.B_room = ChatRoom(self)
 
     '''处理客户端连接（session）'''
     def handle_accept(self):
@@ -136,8 +154,11 @@ class ChatSession(async_chat):
         self.set_terminator('\r\n'.encode())
         self.data = []
         self.server = server
-        '''会话开始于LoginRoom中'''
-        self.enter(LoginRoom(server))
+        '''用户选择的房间'''
+        self.cho_room = ''
+        '''会话开始于ChooseRoom中'''
+        self.enter(ChooseRoom(server))
+        self.login_room = LoginRoom(server)
 
     '''从当前房间移除自身，并将自身添加到下一个房间'''
     def enter(self,room):
